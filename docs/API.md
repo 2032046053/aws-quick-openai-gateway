@@ -72,3 +72,15 @@ previous_response_id 只允许创建该历史的 key 使用。不同 key 请求�
 | 504 | 请求超时 |
 
 部分错误来自 Cloudflare 而不是 Node 服务。应同时检查 content-type、错误 JSON 来源和对应日志，不能把所有 502 都当作模型错误。
+
+## 会话诊断与增量协议
+
+正常的 Responses 完成对象 metadata 包含：
+
+```json
+{"quick_conversation_id":"当前调用者的原生对话ID","quick_reused":true,"quick_sent_chars":210}
+```
+
+Chat Completions 通过 x-quick-conversation-id、x-quick-reused、x-quick-sent-chars 响应头提供同类诊断。网关依据真实 key 记录注入身份，忽略用户伪造的 x-quick-principal。内部 x-quick-session / x-quick-revision / x-quick-incremental 仅供受信任的 Responses 适配层与后端通信；公网客户端不要自行设置。
+
+指令或工具集变化、历史分支、重启和缓存淘汰可能导致原生对话重建。该场景不保证侧栏始终只有一条记录；连续正常续接则应保持同一 conversation ID。

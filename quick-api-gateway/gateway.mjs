@@ -50,12 +50,13 @@ export function createGateway({keysFile,chatURL,responsesURL,upstreamKey,maxConc
       const base=entry[1]==='responses'?responsesURL:chatURL;
       const suffix=entry[1]==='chat'?'/chat/completions':entry[1]==='responses'?'/responses':'/models';
       const upstream=await fetch(base.replace(/\/$/,'')+suffix,{
-        method:req.method,headers:{authorization:'Bearer '+upstreamKey,...(payload?{'content-type':'application/json'}:{})},
+        method:req.method,headers:{authorization:'Bearer '+upstreamKey,'x-quick-principal':principal.id,...(payload?{'content-type':'application/json'}:{})},
         body:payload?JSON.stringify(payload):undefined,signal:controller.signal,redirect:'error',
       });
       // Never forward callers' keys, cookies, arbitrary upstream URLs or response cookies.
       const headers={'content-type':upstream.headers.get('content-type')||'application/json','cache-control':'no-store','x-accel-buffering':'no'};
       if(upstream.headers.has('retry-after'))headers['retry-after']=upstream.headers.get('retry-after');
+      for(const name of ['x-quick-conversation-id','x-quick-reused','x-quick-sent-chars'])if(upstream.headers.has(name))headers[name]=upstream.headers.get(name);
       res.writeHead(upstream.status,headers);
       const remember=data=>{
         if(entry[1]!=='responses'||!upstream.ok)return;

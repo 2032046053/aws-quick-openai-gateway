@@ -7,6 +7,9 @@ import {WebSocketServer} from 'ws';
 import {createApiServer} from './api-server.mjs';
 import {createQuickClient,buildRequest} from './quick-client.mjs';
 import {encodeEvent,EventDecoder} from './quick-protocol.mjs';
+import {EventStreamCodec} from '@smithy/eventstream-codec';
+import {toUtf8,fromUtf8} from '@smithy/util-utf8';
+import {Encoder} from 'cbor-x';
 
 test('decode actual captured EventStream/CBOR frame and reject corrupted CRC',()=>{
   const actual=Buffer.from('AAAAlwAAAFRqArGECzpldmVudC10eXBlBwAOcmF3T3V0cHV0RXZlbnQNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0aW9uL2Nib3INOm1lc3NhZ2UtdHlwZQcABWV2ZW50v2dwYXlsb2FkWCd7InR5cGUiOiJrZWVwYWxpdmUiLCJ0cyI6MTc5NTMxMTYxNjczNn3/Oyza7w==','base64');
@@ -15,6 +18,10 @@ test('decode actual captured EventStream/CBOR frame and reject corrupted CRC',()
   assert.equal(decoder.push(actual.subarray(20))[0].type,'keepalive');
   actual[actual.length-1]^=1;
   assert.throws(()=>new EventDecoder().push(actual));
+});
+test('AWS active-connection limits retain their reason and become HTTP 429',()=>{
+  const bytes=new EventStreamCodec(toUtf8,fromUtf8).encode({headers:{':message-type':{type:'string',value:'exception'},':exception-type':{type:'string',value:'limitExceededException'}},body:new Encoder({useRecords:false}).encode({message:'Too many active connections. Maximum allowed: 3'})});
+  assert.throws(()=>new EventDecoder().push(bytes),e=>e.status===429&&e.code==='quick_limit_exceeded'&&e.message.includes('Maximum allowed: 3'));
 });
 
 test('official SDK through API and binary Quick transport',async()=>{
@@ -87,4 +94,40 @@ test('upstream failure is an HTTP error before SSE starts',async()=>{
     assert.equal(response.status,502);assert.match(response.headers.get('content-type'),/application\/json/);
     assert.equal((await response.json()).error.message,'Session expired');
   }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
+
+test('three native turns reuse one thread and send only new input, with caller isolation',async()=>{
+  const upstream=http.createServer(),wss=new WebSocketServer({server:upstream});const transcripts=new Map(),sent=[],workingIds=[];
+  wss.on('connection',(ws,req)=>{
+    workingIds.push(new URL(req.url,'http://mock').searchParams.get('workingSessionId'));
+    const decoder=new EventDecoder();ws.send(encodeEvent({type:'connected'},'rawOutputEvent'));
+    ws.on('message',bytes=>{
+      for(const e of decoder.push(bytes))if(e.type==='user_message'){
+        const {thread_id,text}=e.payload;sent.push({thread_id,text});
+        const prior=transcripts.get(thread_id)||[];prior.push(text);transcripts.set(thread_id,prior);
+        const answer=prior.length===1?'ACK':'remembered TOKEN_abc';
+        ws.send(encodeEvent({type:'message_start',thread_id,message_id:'answer',payload:{role:'assistant'}},'rawOutputEvent'));
+        ws.send(encodeEvent({type:'message_complete',thread_id,message_id:'answer',payload:{text:answer,tool_calls:[]}},'rawOutputEvent'));
+      }
+    });
+  });
+  upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
+  const client=createQuickClient({accountId:'123456789012',cookie:'session=mock',csrf:'abc',wsUrl:`ws://127.0.0.1:${upstream.address().port}/chat`});
+  const messages=[{role:'user',content:'remember TOKEN_abc'}];const metadata=[];
+  const turn=async(principal='alice')=>{
+    let answer;
+    for await(const event of client({messages,principal})){if(event.type==='session')metadata.push(event);if(event.type==='done')answer=event.text;}
+    messages.push({role:'assistant',content:answer});return answer;
+  };
+  try{
+    await turn();messages.push({role:'user',content:'recall'});assert.equal(await turn(),'remembered TOKEN_abc');
+    messages.push({role:'user',content:'recall again'});await turn();
+    assert.equal(new Set(sent.map(s=>s.thread_id)).size,1);
+    assert.deepEqual(sent.map(s=>s.text),['remember TOKEN_abc','recall','recall again']);
+    assert.deepEqual(metadata.map(m=>m.reused),[false,true,true]);
+    assert.equal(new Set(workingIds).size,1);
+    messages.push({role:'user',content:'new caller'});await turn('bob');assert.equal(new Set(sent.map(s=>s.thread_id)).size,2);
+  }finally{
+    for(const ws of wss.clients)ws.terminate();await new Promise(r=>wss.close(r));await new Promise(r=>upstream.close(r));
+  }
 });

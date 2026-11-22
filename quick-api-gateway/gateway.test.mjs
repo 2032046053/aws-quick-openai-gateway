@@ -13,9 +13,9 @@ test('per-user keys, stream preservation, history isolation, revocation and scop
   const alice=issueKey(file,'Alice'),bob=issueKey(file,'Bob'),limited=issueKey(file,'Chat only',{scopes:['chat'],rpm:1});
   assert.equal(JSON.stringify(readKeys(file)).includes(alice.apiKey),false);
   const internalKey='internal-key-is-never-shared';
-  let upstreamCalls=0,receivedKey,id=0;
+  let upstreamCalls=0,receivedKey,receivedPrincipal,id=0;
   const upstream=http.createServer(async(req,res)=>{
-    upstreamCalls++;receivedKey=req.headers.authorization;
+    upstreamCalls++;receivedKey=req.headers.authorization;receivedPrincipal=req.headers['x-quick-principal'];
     let raw='';for await(const c of req)raw+=c;
     if(req.url==='/v1/models'){res.setHeader('content-type','application/json');res.end('{"data":[{"id":"quick"}]}');return;}
     const input=JSON.parse(raw);
@@ -35,12 +35,12 @@ test('per-user keys, stream preservation, history isolation, revocation and scop
   const server=createGateway({keysFile:file,chatURL:`http://127.0.0.1:${upstream.address().port}/v1`,responsesURL:`http://127.0.0.1:${upstream.address().port}/v1`,upstreamKey:internalKey,publicPrefix:'/quick'});
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const base=`http://127.0.0.1:${server.address().port}/quick/v1`;
-  const post=(apiKey,route,data)=>fetch(base+route,{method:'POST',headers:{authorization:'Bearer '+apiKey,'content-type':'application/json'},body:JSON.stringify(data)});
+  const post=(apiKey,route,data)=>fetch(base+route,{method:'POST',headers:{authorization:'Bearer '+apiKey,'content-type':'application/json','x-quick-principal':'forged-owner'},body:JSON.stringify(data)});
   try{
     assert.equal((await fetch(base+'/models')).status,401);
     assert.equal((await fetch(base+'/models',{headers:{authorization:'Bearer '+internalKey}})).status,401);
     const chat=await post(alice.apiKey,'/chat/completions',{model:'quick',messages:[],stream:true});
-    assert.equal(chat.status,200);assert.match(await chat.text(),/你好/);assert.equal(receivedKey,'Bearer '+internalKey);
+    assert.equal(chat.status,200);assert.match(await chat.text(),/你好/);assert.equal(receivedKey,'Bearer '+internalKey);assert.equal(receivedPrincipal,alice.record.id);
     const first=await (await post(alice.apiKey,'/responses',{model:'quick',input:'hello'})).json();
     assert.equal(first.id,'resp_1');
     const calls=upstreamCalls;

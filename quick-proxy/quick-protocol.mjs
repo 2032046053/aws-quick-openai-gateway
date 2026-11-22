@@ -25,7 +25,14 @@ export class EventDecoder {
       this.pending=this.pending.subarray(size);
       const type=message.headers[':event-type']?.value;
       const kind=message.headers[':message-type']?.value;
-      if(kind==='exception' || kind==='error') throw new Error('Quick upstream exception: '+String(type || message.headers[':exception-type']?.value || 'unknown'));
+      if(kind==='exception' || kind==='error') {
+        const name=String(type || message.headers[':exception-type']?.value || 'unknown');
+        let detail;
+        try{const decoded=decoder.decode(message.body);detail=decoded.message||decoded.Message;}catch{}
+        const error=new Error('Quick upstream exception: '+name+(typeof detail==='string'?': '+detail.slice(0,240):''));
+        error.code=/limitExceeded|throttl/i.test(name)?'quick_limit_exceeded':'quick_upstream_exception';
+        error.status=error.code==='quick_limit_exceeded'?429:502;throw error;
+      }
       if(type==='initial-response') continue;
       const body=decoder.decode(message.body);
       if(body.payload == null) continue;

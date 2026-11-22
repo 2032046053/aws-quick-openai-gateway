@@ -49,7 +49,7 @@ test('authentication, response continuation, streamed function calls and errors'
     assert.equal(events[0].type,'response.created');assert.ok(events.some(e=>e.type==='response.function_call_arguments.done'));
     const completed=events.at(-1);assert.equal(completed.type,'response.completed');const item=completed.response.output[0];assert.equal(item.name,'read_file');
     const second=await call({model:'quick',previous_response_id:completed.response.id,input:[{type:'function_call_output',call_id:item.call_id,output:'file content'}],tools});
-    assert.equal((await second.json()).output[0].content[0].text,'fixed');assert.match(captured.messages[0].content,/file content/);assert.match(captured.messages[0].content,/fix math.js/);
+    assert.equal((await second.json()).output[0].content[0].text,'fixed');assert.match(captured.messages[0].content,/file content/);assert.ok(!captured.messages[0].content.includes('fix math.js'));
     assert.equal((await call({model:'quick',previous_response_id:'missing'})).status,400);
     assert.equal((await call({model:'quick',tools:[{type:'web_search'}]})).status,400);
   }finally{server.close();server.closeAllConnections();}

@@ -20,6 +20,8 @@ Codex 桌面可能携带大量插件和 MCP 工具定义。保持默认核心工
 
 降低同时调用数，等待下一分钟。网关默认每 key 一个并发、20 请求/分钟、总共两个并发；原始后端也有独立并发限制。模型生成较慢时，先前请求尚未结束就发下一条可能触发限制。
 
+AWS 自身还可能返回 limitExceededException。如果原因是 Too many active connections，先关闭闲置的 Quick 网页/桌面客户端以释放连接槽位。它不等于上下文过长或月度额度耗尽；后端会保留上游说明并返回 429。
+
 ## SSE 无输出或连接断开
 
 先直连回环 API，再通过 HTTPS 比较。Chat Completions 应有增量；Responses 会先等待 Quick 的完整动作。检查反代缓冲、Cloudflare 连接和超时。基于不稳定 SSH 回程的入口可能在请求中断开，正式服务建议将三层都部署到 VPS。
@@ -27,6 +29,12 @@ Codex 桌面可能携带大量插件和 MCP 工具定义。保持默认核心工
 ## Previous response not found
 
 服务重启、缓存被淘汰、换 key 或跨 key 访问均可能导致旧 ID 不可用。新开对话或发送完整历史。不要重复请求别人的 ID。
+
+## 侧栏仍然出现多个相似对话
+
+先看 Responses metadata 的 quick_conversation_id 和 quick_reused。不要用相同首条系统消息的哈希来强行合并会话。正常同一历史链应复用；指令/工具集改变、历史分支、过期或进程重启后重建是预期行为。已有重复记录不会被更新自动删除。
+
+quick_sent_chars 是本轮发送给 Quick 的消息字符数，可用它验证续轮只有新增工具结果。工具定义中的大段 description 应变为简短函数签名；用户 instructions 和 custom 格式约束仍保留，不能承诺所有请求同样缩短。
 
 ## 测试命令
 

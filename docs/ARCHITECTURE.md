@@ -29,7 +29,7 @@ invocations/api/ws-rpc 是辅助 JSON 接口，曾观察到 type=get_settings；
 
 - 文本消息支持 system、developer、user、assistant 和 type=text 内容块。
 - system/developer 合并到 Quick custom_prompt，角色优先级不保证等价于 OpenAI。
-- 多轮历史编码为带角色的 JSON 文本，发送给新 Quick 会话；没有完整的原生角色映射。
+- 初次请求的多轮历史编码为带角色的 JSON 文本；后续同调用者的完整历史严格前缀匹配时复用原生 Quick 对话，仅发送新增部分。重复的首条系统消息或含糊的历史匹配不会直接绑定对话。
 - text_delta 映射为 SSE delta，最终 message_complete 用于校验和补齐文本。
 - token usage 未映射，不伪造统计。
 - 不实现图片、音频、原生工具、采样参数、停止词、Responses API 或 embeddings；Responses 由另一层提供。
@@ -41,6 +41,14 @@ invocations/api/ws-rpc 是辅助 JSON 接口，曾观察到 type=get_settings；
 这不是 Quick 原生 function calling，工具参数的完整 schema 校验和执行仍由调用端负责。每次一个动作；不支持真正并行工具调用。Quick 输出先完整缓冲，再转换 Responses 事件，因此 Responses 不是 token 级实时输出。
 
 默认保留核心编程工具，避免桌面插件/MCP schema 造成超长提示。当前实验保护上限为 4 MiB 请求体、350000 字符提示、120 秒请求、两个并发；这些数值不是 AWS 上下文窗口或服务承诺。
+
+工具序列化使用紧凑签名，去掉描述和示例，保留 required、类型、枚举、数值/长度等约束以及 custom 格式。客户端 instructions 完整保留；压缩不会替代执行端的权限和审批。
+
+Responses 的第一次输入包含五行包装规则、指令、工具签名和初始事件。previous_response_id 续接及唯一匹配的全量历史请求只发送 NEW EVENTS。每个工具输出最多 2000 字符，保留头、截断提示和尾；同一轮新增多个事件时全部转发，不只机械取最后一条。
+
+桥接层以随机会话 ID 和 revision 续接后端。后端按网关注入的调用者身份隔离会话，并锁住同一会话的并发请求。分支、工具/指令变更、重启或缓存丢失会触发受控的完整上下文重建；不在已经提交模型请求的网络失败后盲目重试。
+
+后端会话表最多 100 项、空闲过期时间 30 分钟，进程重启后丢失。原生 thread 和 workingSessionId 在正常续接期间保持不变；WebSocket 在每轮结束后关闭，不为每个缓存会话一直占用连接槽位。
 
 previous_response_id 仅保留进程内最近 100 个响应。网关另外校验 key 归属；网关重启后归属表同样丢失。
 

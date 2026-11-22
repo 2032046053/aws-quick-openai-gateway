@@ -8,9 +8,9 @@ function authorized(header,key) {
   const a=Buffer.from(header||''),b=Buffer.from('Bearer '+key);
   return a.length===b.length&&timingSafeEqual(a,b);
 }
-function error(res,status,message,type='invalid_request_error') {
+function error(res,status,message,type='invalid_request_error',code=null) {
   if(res.destroyed)return;
-  const body={error:{message,type,param:null,code:null}};
+  const body={error:{message,type,param:null,code}};
   if(res.headersSent) {res.end(`data: ${JSON.stringify(body)}\n\n`);return;}
   res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(body));
 }
@@ -69,7 +69,16 @@ export function createApiServer({key,complete,maxConcurrent=2}) {
         res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-cache','x-accel-buffering':'no'});res.flushHeaders();
         await write(res,`data: ${JSON.stringify(chunk({role:'assistant',content:''}))}\n\n`);
       };
-      for await(const event of complete({messages:input.messages,signal:controller.signal})) {
+      const principal=String(req.headers['x-quick-principal']||'local');
+      if(!/^[a-zA-Z0-9_.:-]{1,160}$/.test(principal))throw Object.assign(new Error('Invalid principal'),{status:400});
+      const sessionId=req.headers['x-quick-session'];
+      const incremental=req.headers['x-quick-incremental']==='1';
+      if(sessionId&&!/^[a-zA-Z0-9_-]{1,100}$/.test(sessionId))throw Object.assign(new Error('Invalid session ID'),{status:400});
+      const revision=Number(req.headers['x-quick-revision']);
+      for await(const event of complete({messages:input.messages,signal:controller.signal,principal,sessionId,incremental,revision})) {
+        if(event.type==='session'){
+          for(const [name,value] of Object.entries({'id':event.id,'conversation-id':event.conversationId,'revision':event.revision,'reused':event.reused,'sent-chars':event.sentChars}))res.setHeader('x-quick-'+(name==='id'?'session-id':name),String(value));
+        }
         if(event.type==='delta') {
           text+=event.text;
           if(input.stream){await start();await write(res,`data: ${JSON.stringify(chunk({content:event.text}))}\n\n`);}
@@ -84,7 +93,7 @@ export function createApiServer({key,complete,maxConcurrent=2}) {
         res.end(JSON.stringify({id,object:'chat.completion',created,model,choices:[{index:0,message:{role:'assistant',content:text},finish_reason:'stop'}]}));
       }
     }catch(e){
-      if(!controller.signal.aborted)error(res,e.status||502,e.message,e.status===400?'invalid_request_error':'upstream_error');
+      if(!controller.signal.aborted)error(res,e.status||502,e.message,e.status===400?'invalid_request_error':'upstream_error',e.code||null);
     }finally{active--;req.off('aborted',abort);res.off('close',abort);}
   });
 }
