@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
-import {makePrompt,compactInput,compactTools,fingerprint,historyPrefix} from './prompts.mjs';
+import {makePrompt,compactInput,compactTools,filterTools,fingerprint,historyPrefix} from './prompts.mjs';
 export {makePrompt} from './prompts.mjs';
 
 export function parseAction(text, tools=[], toolChoice) {
@@ -54,7 +54,12 @@ export function createBridge({key,upstream,upstreamKey=key,fetchImpl=fetch,timeo
       if(!Array.isArray(b.tools||[]))throw Object.assign(new Error('tools must be an array'),{status:400});
       // Codex Desktop sends dozens of plugin/MCP tool schemas (often >300k chars). Quick cannot handle that context,
       // so by default only core coding tools are exposed. Set QUICK_CODEX_TOOLS=all to forward every tool.
-      if(toolFilter&&Array.isArray(b.tools)){const dropped=b.tools.filter(t=>!toolFilter.has(t?.name));if(dropped.length){b.tools=b.tools.filter(t=>toolFilter.has(t?.name));onRequest({droppedTools:dropped.length,droppedChars:JSON.stringify(dropped).length});}}
+      if(toolFilter&&Array.isArray(b.tools)){
+        const before=b.tools;b.tools=filterTools(before,toolFilter);
+        const count=list=>list.reduce((n,t)=>n+(t?.type==='namespace'?(t.tools||[]).length:1),0);
+        const dropped=count(before)-count(b.tools);
+        if(dropped)onRequest({droppedTools:dropped,droppedChars:JSON.stringify(before).length-JSON.stringify(b.tools).length});
+      }
       const unsupported=(b.tools||[]).filter(t=>!supported(t));
       if(unsupported.length){onRequest({unsupportedTools:unsupported.map(t=>({name:t?.name,type:t?.type}))});throw Object.assign(new Error('Unsupported tool types: '+unsupported.map(t=>t?.type||'invalid').join(', ')+'. Supports external function/custom tools and namespace groups; hosted tools must be disabled.'),{status:400});}
       const owner=String(req.headers['x-quick-principal']||'local');

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
-import {compactTools,trimOutput,compactInput,makePrompt} from './prompts.mjs';
+import {compactTools,trimOutput,compactInput,makePrompt,filterTools} from './prompts.mjs';
 import {createBridge} from './adapter.mjs';
 
 test('compact signatures remove verbose descriptions but retain parameter constraints and custom grammars',()=>{
@@ -19,6 +19,12 @@ test('tool output keeps its head and tail within 2000 characters, without trunca
   assert.equal(result.length,2000);assert.ok(result.startsWith('HEAD'));assert.ok(result.endsWith('TAIL'));assert.match(result,/truncated/);
   const input=compactInput([{type:'function_call_output',output:text},{role:'tool',content:text},{role:'user',content:text}]);
   assert.equal(input[0].output.length,2000);assert.equal(input[1].content.length,2000);assert.equal(input[2].content.length,text.length);
+});
+test('core filtering keeps named tools inside namespaces while removing unrelated children',()=>{
+  const input=[{type:'namespace',name:'functions',tools:[{type:'function',name:'exec_command'},{type:'function',name:'unrelated'}]},{type:'namespace',name:'mcp',tools:[{type:'function',name:'browser'}]}];
+  const result=filterTools(input,new Set(['exec_command']));
+  assert.deepEqual(result,[{type:'namespace',name:'functions',tools:[{type:'function',name:'exec_command'}]}]);
+  assert.equal(input[0].tools.length,2); // do not mutate the caller's original definitions
 });
 test('Responses continuation sends only new events and isolates owners; full-prefix clients also reuse',async()=>{
   const key='session-test-key-with-24-characters';let calls=[];

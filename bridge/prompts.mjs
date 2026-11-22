@@ -27,6 +27,17 @@ export const canonicalHistory=items=>items.map(item=>stringify(historyItem(item)
 export function historyPrefix(history,items){const a=canonicalHistory(history),b=canonicalHistory(items);return a.length<b.length&&a.every((v,i)=>v===b[i]);}
 
 const hints={exec_command:'Run shell command in PTY',write_stdin:'Write or poll running command',apply_patch:'Apply a file patch',update_plan:'Update task plan',request_user_input:'Ask user for missing input',request_permissions:'Request required permissions'};
+export function filterTools(tools,allowed){
+  if(!allowed)return tools;
+  return tools.flatMap(tool=>{
+    if(allowed.has(tool?.name))return [tool];
+    if(tool?.type==='namespace'){
+      const children=(tool.tools||[]).filter(child=>allowed.has(child?.name)||allowed.has(tool.name+'.'+child?.name));
+      return children.length?[{...tool,tools:children}]:[];
+    }
+    return [];
+  });
+}
 function stripDescriptions(schema){
   if(Array.isArray(schema))return schema.map(stripDescriptions);
   if(!schema||typeof schema!=='object')return schema;
