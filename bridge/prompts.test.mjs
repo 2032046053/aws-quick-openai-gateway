@@ -20,6 +20,32 @@ test('tool output keeps its head and tail within 2000 characters, without trunca
   const input=compactInput([{type:'function_call_output',output:text},{role:'tool',content:text},{role:'user',content:text}]);
   assert.equal(input[0].output.length,2000);assert.equal(input[1].content.length,2000);assert.equal(input[2].content.length,text.length);
 });
+test('opt-in protocol preset omits only fixed rules, preserving dynamic instructions, tool choice and signatures',()=>{
+  const request={instructions:'OS: Windows; Workdir: example; Ask before writes. '+ 'I'.repeat(5000),tool_choice:'none',tools:[{type:'namespace',name:'functions',tools:[{type:'function',name:'exec_command',parameters:{type:'object',properties:{cmd:{type:'string',minLength:1}},required:['cmd']}},{type:'custom',name:'apply_patch',format:{type:'text'}}]}]};
+  const history=[{role:'developer',content:'Keep this dynamic restriction.'},{role:'user',content:'Inspect only.'}];
+  const preset=makePrompt(request,history,{protocolPreset:true});
+  assert.ok(!preset.includes('EXTERNAL HARNESS:'));
+  assert.ok(preset.includes(request.instructions));assert.ok(preset.includes(compactTools(request.tools)));
+  assert.ok(preset.includes(JSON.stringify(history)));assert.match(preset,/TOOL_CHOICE: "none"/);
+  assert.ok(preset.length<makePrompt(request,history).length);
+  assert.equal(makePrompt(request,history,{protocolPreset:true,incremental:true}),makePrompt(request,history,{incremental:true}));
+});
+test('preset session recovery retains dynamic setup without restoring inline fixed protocol',async()=>{
+  const key='preset-test-key-with-24-characters',calls=[];let fail=false;
+  const server=createBridge({key,upstream:'http://mock/v1',protocolPreset:true,fetchImpl:async(url,options)=>{
+    calls.push(options);
+    if(fail){fail=false;return {ok:false,status:409,json:async()=>({error:{code:'quick_session_missing'}})};}
+    return {ok:true,json:async()=>({choices:[{message:{content:'{"type":"message","text":"ok"}'}}]})};
+  }});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const call=body=>fetch(`http://127.0.0.1:${server.address().port}/v1/responses`,{method:'POST',headers:{authorization:'Bearer '+key,'content-type':'application/json'},body:JSON.stringify({model:'quick',instructions:'Never change client files.',tool_choice:'none',...body})});
+  try{
+    const first=await(await call({input:'remember preset task'})).json();fail=true;
+    assert.equal((await call({previous_response_id:first.id,input:'continue'})).status,200);
+    assert.equal(calls.length,3);
+    for(const index of [0,2]){const prompt=JSON.parse(calls[index].body).messages[0].content;assert.ok(!prompt.includes('EXTERNAL HARNESS:'));assert.match(prompt,/Never change client files/);assert.match(prompt,/remember preset task/);assert.match(prompt,/TOOL_CHOICE: "none"/);}
+  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
 test('core filtering keeps named tools inside namespaces while removing unrelated children',()=>{
   const input=[{type:'namespace',name:'functions',tools:[{type:'function',name:'exec_command'},{type:'function',name:'unrelated'}]},{type:'namespace',name:'mcp',tools:[{type:'function',name:'browser'}]}];
   const result=filterTools(input,new Set(['exec_command']));

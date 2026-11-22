@@ -81,8 +81,11 @@ export function compactTools(tools=[]){
   return lines.join('\n');
 }
 export const fingerprint=request=>createHash('sha256').update(stringify({instructions:request.instructions||'',tools:compactTools(request.tools),toolChoice:request.tool_choice||'auto'})).digest('hex');
-export function makePrompt(request,history,{incremental=false}={}){
+export function makePrompt(request,history,{incremental=false,protocolPreset=false}={}){
   if(incremental)return 'NEW EVENTS (JSON):\n'+JSON.stringify(compactInput(history));
+  // Opt in only for a dedicated backend targeting a verified protocol agent.
+  // Dynamic client instructions and signatures must never move into the preset.
+  if(protocolPreset)return 'TOOL_CHOICE: '+JSON.stringify(request.tool_choice||'auto')+'\nINSTRUCTIONS:\n'+(request.instructions||'')+'\nTOOLS:\n'+compactTools(request.tools)+'\nEVENTS (JSON):\n'+JSON.stringify(compactInput(history));
   const rules=[
     "EXTERNAL HARNESS: files/tools/commands belong to the user's local machine; select one pure JSON action for that client to execute under its approvals.",
     'Function: {"type":"tool_call","name":"NAME","arguments":{}}; custom: {"type":"custom_tool_call","name":"NAME","input":"RAW"}; namespace tools also require "namespace":"EXACT_NAMESPACE_NAME".',

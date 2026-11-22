@@ -29,7 +29,7 @@ function outputItem(a) {
 }
 
 export const CORE_TOOLS=['exec_command','shell','shell_command','local_shell','write_stdin','apply_patch','update_plan','request_user_input','request_permissions'];
-export function createBridge({key,upstream,upstreamKey=key,fetchImpl=fetch,timeoutMs=120000,onRequest=()=>{},tools='all'}) {
+export function createBridge({key,upstream,upstreamKey=key,fetchImpl=fetch,timeoutMs=120000,onRequest=()=>{},tools='all',protocolPreset=false}) {
   const toolFilter=tools==='all'?null:new Set(tools);
   const cache=new Map(); let active=0;
   if(typeof key!=='string'||key.length<24) throw new Error('A local key of at least 24 characters is required');
@@ -80,7 +80,7 @@ export function createBridge({key,upstream,upstreamKey=key,fetchImpl=fetch,timeo
       if(JSON.stringify(history).includes('"type":"input_image"'))throw Object.assign(new Error('Images are unsupported'),{status:400});
       let reuse=!!previous&&previous.setup===setup;
       const delta=b.previous_response_id?compact:compact.slice(reuse?previous.history.length:0);
-      let prompt=makePrompt(b,reuse?delta:history,{incremental:reuse});
+      let prompt=makePrompt(b,reuse?delta:history,{incremental:reuse,protocolPreset});
       let sessionId=reuse?previous.sessionId:randomUUID(),revision=reuse?previous.revision:0;
       if(prompt.length>350000){onRequest({oversized:true,promptChars:prompt.length,instructionsChars:(b.instructions||'').length,historyChars:JSON.stringify(history).length,inputItems:input.length,toolSizes:(b.tools||[]).map(t=>({name:t.name,type:t.type,chars:JSON.stringify(t).length})).sort((x,y)=>y.chars-x.chars).slice(0,12)});}
       if(prompt.length>350000)throw Object.assign(new Error('Quick experimental context limit exceeded'),{status:413});
@@ -97,7 +97,7 @@ export function createBridge({key,upstream,upstreamKey=key,fetchImpl=fetch,timeo
         if(r.status===409&&!attempt){
           const failure=await r.json();
           if(['quick_session_missing','quick_session_conflict','quick_session_busy'].includes(failure.error?.code)){
-            sessionId=randomUUID();revision=0;reuse=false;prompt=makePrompt(b,history);
+            sessionId=randomUUID();revision=0;reuse=false;prompt=makePrompt(b,history,{protocolPreset});
             if(prompt.length>350000)throw Object.assign(new Error('Full-history recovery exceeds context limit'),{status:413});
             r=await send(prompt);onRequest({sessionRecovery:true,promptChars:prompt.length});
           }else throw Object.assign(new Error('Quick session was rejected'),{status:409});
@@ -147,7 +147,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   if(!file)throw new Error('Set QUICK_CLIENT_FILE to the existing client.local.json (do not paste the key into source).');
   const c=JSON.parse(fs.readFileSync(file,'utf8'));
   const envTools=process.env.QUICK_CODEX_TOOLS;
-  const server=createBridge({key:c.apiKey,upstream:c.baseURL,tools:envTools==='all'?'all':envTools?envTools.split(',').map(s=>s.trim()).filter(Boolean):CORE_TOOLS,onRequest:r=>console.log(JSON.stringify({at:new Date().toISOString(),...r}))});
+  const protocolPreset=process.env.QUICK_CODEX_PROTOCOL_PRESET===undefined?c.protocolPreset===true:process.env.QUICK_CODEX_PROTOCOL_PRESET==='1';
+  const server=createBridge({key:c.apiKey,upstream:c.baseURL,protocolPreset,tools:envTools==='all'?'all':envTools?envTools.split(',').map(s=>s.trim()).filter(Boolean):CORE_TOOLS,onRequest:r=>console.log(JSON.stringify({at:new Date().toISOString(),...r}))});
   server.listen(Number(process.env.QUICK_CODEX_PORT||8788),'127.0.0.1',()=>console.log('Quick Codex experimental bridge on http://127.0.0.1:'+(process.env.QUICK_CODEX_PORT||8788)+'/v1'));
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close();server.closeAllConnections();});
 }
