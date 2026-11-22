@@ -1,0 +1,21 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import OpenAI from 'openai';
+const config=JSON.parse(fs.readFileSync('client.local.json','utf8'));
+const client=new OpenAI({apiKey:config.apiKey,baseURL:config.baseURL,maxRetries:0,timeout:120000});
+const results=[];
+const model=(await client.models.list()).data[0].id;
+assert.equal(model,'quick');
+const result=await client.chat.completions.create({model,messages:[{role:'user',content:'请只回复：NONSTREAM_734'}]});
+assert.equal(result.choices[0].message.content,'NONSTREAM_734');
+results.push({test:'official-sdk-nonstream',status:'passed',reply:result.choices[0].message.content});
+let text='',chunks=0,finished=false;
+const stream=await client.chat.completions.create({model,messages:[{role:'user',content:'请只回复：STREAM_735'}],stream:true});
+for await(const chunk of stream){text+=chunk.choices[0]?.delta.content||'';chunks++;if(chunk.choices[0]?.finish_reason==='stop')finished=true;}
+assert.equal(text,'STREAM_735');assert.equal(finished,true);
+results.push({test:'official-sdk-stream',status:'passed',reply:text,chunks});
+const history=await client.chat.completions.create({model,messages:[{role:'user',content:'请记住数字739'},{role:'assistant',content:'已记住739。'},{role:'user',content:'刚才的数字是什么？只回复数字。'}]});
+assert.equal(history.choices[0].message.content.trim(),'739');
+results.push({test:'text-history',status:'passed',reply:'739'});
+fs.writeFileSync('verification.json',JSON.stringify({verifiedAt:new Date().toISOString(),upstream:'AWS Quick',results},null,2));
+console.log(JSON.stringify(results,null,2));

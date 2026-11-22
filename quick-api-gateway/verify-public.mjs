@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import OpenAI from 'openai';
+const file=process.argv[2];
+if(!file)throw new Error('Usage: node verify-public.mjs <clients/user-id.json>');
+const config=JSON.parse(fs.readFileSync(file,'utf8'));
+const client=new OpenAI({apiKey:config.apiKey,baseURL:config.baseURL,maxRetries:0,timeout:150000});
+const results=[];
+assert.equal((await client.models.list()).data[0].id,'quick');
+results.push({test:'public-models',passed:true});
+const response=await client.chat.completions.create({model:'quick',messages:[{role:'user',content:'请只回复：PUBLIC_GATEWAY_736'}]});
+assert.equal(response.choices[0].message.content,'PUBLIC_GATEWAY_736');
+results.push({test:'public-chat',passed:true,reply:'PUBLIC_GATEWAY_736'});
+let text='',finished=false;
+for await(const chunk of await client.chat.completions.create({model:'quick',messages:[{role:'user',content:'请只回复：PUBLIC_STREAM_737'}],stream:true})){
+  text+=chunk.choices[0]?.delta.content||'';if(chunk.choices[0]?.finish_reason==='stop')finished=true;
+}
+assert.equal(text,'PUBLIC_STREAM_737');assert.ok(finished);
+results.push({test:'public-chat-stream',passed:true,reply:text});
+const result=await client.responses.create({model:'quick',input:'请只回复：PUBLIC_RESPONSES_738',tool_choice:'none'});
+assert.equal(result.output_text.trim(),'PUBLIC_RESPONSES_738');
+results.push({test:'public-responses',passed:true,reply:result.output_text});
+const records=await client.responses.create({model:'quick',previous_response_id:result.id,input:'请只回复：PUBLIC_CONTINUE_739',tool_choice:'none'});
+assert.equal(records.output_text.trim(),'PUBLIC_CONTINUE_739');
+results.push({test:'public-responses-history',passed:true,reply:records.output_text});
+const report={at:new Date().toISOString(),baseURL:config.baseURL,results};
+fs.writeFileSync('public-verification.json',JSON.stringify(report,null,2));
+console.log(JSON.stringify(report,null,2));

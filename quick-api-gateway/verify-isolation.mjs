@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const [aliceFile,bobFile]=process.argv.slice(2);
+const alice=JSON.parse(fs.readFileSync(aliceFile,'utf8')),bob=JSON.parse(fs.readFileSync(bobFile,'utf8'));
+const post=(client,data)=>fetch(client.baseURL+'/responses',{method:'POST',headers:{authorization:'Bearer '+client.apiKey,'content-type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(120000)});
+const created=await post(alice,{model:'quick',input:'请只回复：ISOLATED_741',tool_choice:'none'});
+assert.equal(created.status,200);const response=await created.json();assert.ok(response.id);
+const denied=await post(bob,{model:'quick',previous_response_id:response.id,input:'继续',tool_choice:'none'});
+assert.equal(denied.status,400);
+console.log('Public cross-user response history isolation passed (HTTP 400).');
+const report=JSON.parse(fs.readFileSync('public-verification.json','utf8'));
+report.results.push({test:'public-cross-user-history-isolation',passed:true,status:denied.status});
+fs.writeFileSync('public-verification.json',JSON.stringify(report,null,2));

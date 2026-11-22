@@ -1,0 +1,1 @@
+{"name":"quick-api-gateway","version":"1.0.0","private":true,"type":"module","engines":{"node":">=22"},"scripts":{"start":"node gateway.mjs","test":"node --test"},"devDependencies":{"openai":"^7.62.0"}}

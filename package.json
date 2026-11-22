@@ -1,0 +1,15 @@
+{
+  "name": "aws-quick-openai-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental AWS Quick text Chat Completions, Codex Responses bridge, and multi-key gateway",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "test": "node --test quick-proxy/api.test.mjs quick-proxy/proxy.test.mjs bridge/adapter.test.mjs quick-api-gateway/gateway.test.mjs",
+    "start:chat": "npm --prefix quick-proxy start",
+    "start:bridge": "node bridge/adapter.mjs",
+    "start:gateway": "npm --prefix quick-api-gateway start"
+  }
+}
