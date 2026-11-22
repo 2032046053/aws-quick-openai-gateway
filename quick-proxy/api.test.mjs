@@ -48,7 +48,7 @@ test('official SDK through API and binary Quick transport',async()=>{
     });
   });
   upstream.listen(0,'127.0.0.1');await once(upstream,'listening');
-  const complete=createQuickClient({accountId:'123456789012',cookie:'session=mock',csrf:'abc%2Fdef%3D',wsUrl:`ws://127.0.0.1:${upstream.address().port}/chat`,timeoutMs:3000});
+  const complete=createQuickClient({accountId:'123456789012',cookie:'session=mock',csrf:'abc%2Fdef%3D',protocolAgentArn:'arn:mock:protocol-agent',wsUrl:`ws://127.0.0.1:${upstream.address().port}/chat`,timeoutMs:3000});
   const key='test-key-with-at-least-24-characters';
   const server=createApiServer({key,complete});server.listen(0,'127.0.0.1');await once(server,'listening');
   const baseURL=`http://127.0.0.1:${server.address().port}/v1`;
@@ -59,6 +59,7 @@ test('official SDK through API and binary Quick transport',async()=>{
     const result=await client.chat.completions.create({model:'quick',messages});
     assert.equal(result.choices[0].message.content,'你好，世界');
     assert.equal(request.payload.custom_prompt,'使用中文');
+    assert.match(request.payload.chat_agent_id,/agent\/SYSTEM$/);
     const firstThread=request.payload.thread_id;
     let text='',finish;
     for await(const chunk of await client.chat.completions.create({model:'quick',messages,stream:true})){
@@ -66,6 +67,8 @@ test('official SDK through API and binary Quick transport',async()=>{
     }
     assert.equal(text,'你好，世界');assert.equal(finish,'stop');
     assert.notEqual(request.payload.thread_id,firstThread);
+    const preset=await fetch(baseURL+'/chat/completions',{method:'POST',headers:{authorization:'Bearer '+key,'content-type':'application/json','x-quick-incremental':'1','x-quick-session':'preset-routing-test','x-quick-revision':'0'},body:JSON.stringify({model:'quick',messages})});
+    assert.equal(preset.status,200);await preset.json();assert.equal(request.payload.chat_agent_id,'arn:mock:protocol-agent');
     await assert.rejects(()=>client.chat.completions.create({model:'quick',messages,tools:[]}),e=>e.status===400);
     const unauthorized=new OpenAI({apiKey:'wrong',baseURL,maxRetries:0});
     await assert.rejects(()=>unauthorized.models.list(),e=>e.status===401);

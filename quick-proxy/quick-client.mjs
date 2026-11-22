@@ -76,7 +76,7 @@ export function createQuickClient(config) {
             traceId:randomUUID(),text,send_origin:'composer',had_physical_input:false,...features,
             message_id:'msg-'+randomUUID().slice(0,8),thread_id:threadId,agent_mode:'smart',thinking_effort:'off',
             user_timezone:config.timezone || 'Asia/Shanghai',user_locale:'zh-CN',custom_prompt:customPrompt,
-            chat_agent_id:config.agentArn || `arn:aws:quicksight:${config.region || 'us-east-1'}:${config.accountId}:agent/SYSTEM`,
+            chat_agent_id:(incremental&&config.protocolAgentArn) || config.agentArn || `arn:aws:quicksight:${config.region || 'us-east-1'}:${config.accountId}:agent/SYSTEM`,
             auto_routing:false,web_search_enabled:false,direct_chat:false,voice_mode:false,voice_id:'matthew',tts_speed:1.1,
           }});
           continue;
