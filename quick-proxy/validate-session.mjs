@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import WebSocket from 'ws';
+import {randomUUID} from 'node:crypto';
+const c=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const url=new URL(`wss://quick.aws.com/sn/account/${c.accountId}/wsproxy/service/SpaceNeedleConversationService/operation/ChatBidirectionalStream`);
+for(const [k,v]of Object.entries({'wsproxy-protocol':'rpc-v2-cbor',awsAccountId:c.accountId,surfaceType:'WEB_EXPERIENCE',agentServiceType:'UNIFIED_QUICK',outpostId:'web0',workingSessionId:randomUUID(),mbtc:decodeURIComponent(c.csrf)}))url.searchParams.set(k,v);
+const ws=new WebSocket(url,c.protocols||['subprotocol-json',encodeURIComponent(JSON.stringify({csrfToken:c.csrf}))],{headers:{Origin:'https://quick.aws.com',Cookie:c.cookie,'User-Agent':'Mozilla/5.0'},handshakeTimeout:15000});
+let ok=false;const timer=setTimeout(()=>{process.exitCode=1;ws.terminate();},20000);
+ws.on('open',()=>{ok=true;clearTimeout(timer);ws.close();});
+ws.on('unexpected-response',(req,res)=>{res.resume();ws.terminate();});
+ws.on('error',()=>{clearTimeout(timer);process.exitCode=1;});
+ws.on('close',()=>{clearTimeout(timer);if(!ok)process.exitCode=1;});

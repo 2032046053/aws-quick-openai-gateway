@@ -2,16 +2,18 @@ import http from 'node:http';
 import fs from 'node:fs';
 import {pathToFileURL} from 'node:url';
 import {digest,readKeys} from './keys.mjs';
+import {createUpstreamPool} from './upstream-pool.mjs';
+import {upstreamConfig} from './config.mjs';
 
-export function createGateway({keysFile,chatURL,responsesURL,upstreamKey,maxConcurrent=2,timeoutMs=150000,publicPrefix='',log=()=>{}}){
+export function createGateway({keysFile,chatURL,responsesURL,upstreamKey,upstreamKeys,upstreamKeyHeader='authorization',upstreamMaxAttempts=4,upstreamRetryStatuses=[401,403,429],maxConcurrent=2,timeoutMs=150000,publicPrefix='',log=()=>{}}){
   for(const address of [chatURL,responsesURL]){
     const url=new URL(address);
     if(url.protocol!=='http:'||url.hostname!=='127.0.0.1')throw new Error('Upstream must be an explicit loopback HTTP URL');
   }
-  if(!upstreamKey)throw new Error('Missing internal upstream key');
+  const pool=createUpstreamPool({keys:upstreamKeys??[upstreamKey],keyHeader:upstreamKeyHeader,maxAttempts:upstreamMaxAttempts,retryStatuses:upstreamRetryStatuses});
   const owners=new Map(),limits=new Map();let totalActive=0;
   return http.createServer(async(req,res)=>{
-    const started=Date.now();let principal,state,occupied=false,controller,timer,received=0;
+    const started=Date.now();let principal,state,occupied=false,controller,timer,received=0,routePath;
     const sendError=(status,message)=>{
       if(res.headersSent){res.destroy();return;}
       res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
@@ -20,10 +22,15 @@ export function createGateway({keysFile,chatURL,responsesURL,upstreamKey,maxConc
     const disconnected=()=>controller?.abort();
     try{
       const route=publicPrefix&&req.url?.startsWith(publicPrefix+'/')?req.url.slice(publicPrefix.length):req.url;
-      const routes={'/v1/models':['GET','models'],'/v1/chat/completions':['POST','chat'],'/v1/responses':['POST','responses']};
-      const entry=routes[route];
+      const routes={'/v1/models':['GET','models'],'/v1/chat/completions':['POST','chat'],'/v1/responses':['POST','responses'],'/v1/messages':['POST','responses']};
+      routePath=route?.split('?')[0];
+      if(routePath==='/healthz'&&req.method==='GET'){
+        res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+        res.end(JSON.stringify({status:'ok',upstreamKeyPoolSize:pool.size,availableUpstreamKeys:pool.available}));return;
+      }
+      const entry=routes[routePath];
       if(!entry){sendError(404,'Unknown API endpoint');return;}
-      const token=/^Bearer (\S+)$/.exec(req.headers.authorization||'')?.[1];
+      const token=/^Bearer (\S+)$/.exec(req.headers.authorization||(routePath==='/v1/messages'&&req.headers['x-api-key']?'Bearer '+req.headers['x-api-key']:''))?.[1];
       if(!token){sendError(401,'Invalid API key');return;}
       const hash=digest(token);
       principal=readKeys(keysFile).keys.find(k=>k.enabled&&k.hash===hash&&(!k.expiresAt||Date.parse(k.expiresAt)>Date.now()));
@@ -48,16 +55,17 @@ export function createGateway({keysFile,chatURL,responsesURL,upstreamKey,maxConc
         }
       }
       const base=entry[1]==='responses'?responsesURL:chatURL;
-      const suffix=entry[1]==='chat'?'/chat/completions':entry[1]==='responses'?'/responses':'/models';
-      const upstream=await fetch(base.replace(/\/$/,'')+suffix,{
-        method:req.method,headers:{authorization:'Bearer '+upstreamKey,'x-quick-principal':principal.id,...(payload?{'content-type':'application/json'}:{})},
+      const suffix=routePath==='/v1/messages'?'/messages':entry[1]==='chat'?'/chat/completions':entry[1]==='responses'?'/responses':'/models';
+      const {response:upstream}=await pool.fetch(base.replace(/\/$/,'')+suffix,{
+        method:req.method,headers:{'x-quick-principal':principal.id,...(payload?{'content-type':'application/json'}:{})},
         body:payload?JSON.stringify(payload):undefined,signal:controller.signal,redirect:'error',
-      });
+      },attempt=>log({at:new Date().toISOString(),event:'upstream_attempt',keyId:principal.id,path:routePath,...attempt}));
       // Never forward callers' keys, cookies, arbitrary upstream URLs or response cookies.
-      const headers={'content-type':upstream.headers.get('content-type')||'application/json','cache-control':'no-store','x-accel-buffering':'no'};
+      const headers={'content-type':upstream.headers.get('content-type')||'application/json','cache-control':'no-store, no-transform','x-accel-buffering':'no'};
       if(upstream.headers.has('retry-after'))headers['retry-after']=upstream.headers.get('retry-after');
-      for(const name of ['x-quick-conversation-id','x-quick-reused','x-quick-sent-chars'])if(upstream.headers.has(name))headers[name]=upstream.headers.get(name);
+      for(const name of ['x-quick-conversation-id','x-quick-reused','x-quick-sent-chars','x-quick-context-compacted','x-quick-context-chars','x-quick-context-bytes','x-quick-tool-registry','x-quick-tool-definition-count','x-quick-request-total-bytes'])if(upstream.headers.has(name))headers[name]=upstream.headers.get(name);
       res.writeHead(upstream.status,headers);
+      if(headers['content-type'].includes('text/event-stream'))res.flushHeaders();
       const remember=data=>{
         if(entry[1]!=='responses'||!upstream.ok)return;
         const id=data?.response?.id||(data?.object==='response'?data.id:null);
@@ -92,13 +100,16 @@ export function createGateway({keysFile,chatURL,responsesURL,upstreamKey,maxConc
       if(entry[1]==='responses'&&!isSSE){let parsed;try{parsed=JSON.parse(buffer);}catch{}remember(parsed);}
       res.end();
     }catch(e){
-      if(!res.destroyed)sendError(controller?.signal.aborted?504:502,'Gateway could not complete the upstream request');
+      if(!res.destroyed){
+        if(e.status===503&&!res.headersSent)res.setHeader('retry-after',String(e.retryAfter));
+        sendError(controller?.signal.aborted?504:e.status===503?503:502,e.status===503?e.message:'Gateway could not complete the upstream request');
+      }
     }finally{
       clearTimeout(timer);res.off('close',disconnected);req.off('aborted',disconnected);
       // Also cancel upstream reads when the downstream body was rejected or disconnected.
       controller?.abort();
       if(occupied){state.active--;totalActive--;}
-      log({at:new Date().toISOString(),keyId:principal?.id||null,path:['/v1/models','/v1/chat/completions','/v1/responses'].includes(req.url)?req.url:'unknown',status:res.statusCode,requestBytes:received,durationMs:Date.now()-started});
+      log({at:new Date().toISOString(),keyId:principal?.id||null,path:['/healthz','/v1/models','/v1/chat/completions','/v1/responses','/v1/messages'].includes(routePath)?routePath:'unknown',status:res.statusCode,requestBytes:received,durationMs:Date.now()-started});
       // Expired rate-window entries without active requests are disposable.
       if(limits.size>1000)for(const[id,item]of limits)if(!item.active&&item.minute<Math.floor(Date.now()/60000)-1)limits.delete(id);
     }
@@ -108,7 +119,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const clientFile=process.env.QUICK_CLIENT_FILE;
   if(!clientFile)throw new Error('Set QUICK_CLIENT_FILE to the existing internal client.local.json');
   const client=JSON.parse(fs.readFileSync(clientFile,'utf8'));
-  const server=createGateway({keysFile:process.env.GATEWAY_KEYS_FILE||'keys.local.json',chatURL:'http://127.0.0.1:8787/v1',responsesURL:'http://127.0.0.1:8788/v1',upstreamKey:client.apiKey,publicPrefix:'/quick',log:entry=>console.log(JSON.stringify(entry))});
+  const config=upstreamConfig(process.env,client.apiKey);
+  const server=createGateway({keysFile:process.env.GATEWAY_KEYS_FILE||'keys.local.json',chatURL:'http://127.0.0.1:8787/v1',responsesURL:'http://127.0.0.1:8788/v1',...config,publicPrefix:'/quick',log:entry=>console.log(JSON.stringify(entry))});
   server.listen(Number(process.env.GATEWAY_PORT||8789),'127.0.0.1',()=>console.log('Gateway ready at http://127.0.0.1:'+(process.env.GATEWAY_PORT||8789)+'/v1'));
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close();server.closeAllConnections();});
 }

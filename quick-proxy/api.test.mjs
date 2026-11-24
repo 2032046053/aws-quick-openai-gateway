@@ -134,3 +134,15 @@ test('three native turns reuse one thread and send only new input, with caller i
     for(const ws of wss.clients)ws.terminate();await new Promise(r=>wss.close(r));await new Promise(r=>upstream.close(r));
   }
 });
+
+test('session file is hot loaded between requests and account changes are rejected',async()=>{
+ const fs=await import('node:fs/promises'),os=await import('node:os'),path=await import('node:path');
+ const {createQuickClient}=await import('./quick-client.mjs');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'quick-session-'));const file=path.join(dir,'session.json');
+ const client=createQuickClient({accountId:'123456789012',cookie:'old',csrf:'old',sessionFile:file});
+ try{
+  await fs.writeFile(file,JSON.stringify({accountId:'123456789012',cookie:'',csrf:''}));
+  await assert.rejects(async()=>{for await(const e of client({messages:[{role:'user',content:'hi'}]})){}},/not configured/);
+  await fs.writeFile(file,JSON.stringify({accountId:'999999999999',cookie:'new',csrf:'new'}));
+  await assert.rejects(async()=>{for await(const e of client({messages:[{role:'user',content:'hi'}]})){}},/account changed/);
+ }finally{await fs.rm(dir,{recursive:true,force:true});}
+});

@@ -15,5 +15,10 @@
 **/cookie.txt
 **/*cookie*.txt
 **/codex-home/
+**/__pycache__/
+**/*.py[cod]
+**/tls/
+**/privkey.pem
+**/fullchain.pem
 .DS_Store
 Thumbs.db

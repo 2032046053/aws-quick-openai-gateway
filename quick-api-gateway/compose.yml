@@ -1,0 +1,80 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${GATEWAY_IMAGE:-quick-api-gateway:keypool}
+    restart: unless-stopped
+    network_mode: host
+    user: "${QUICK_SERVICE_UID:-1000}:${QUICK_SERVICE_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      GATEWAY_PORT: ${GATEWAY_PORT:-18789}
+      QUICK_CLIENT_FILE: /run/secrets/internal-client.json
+      GATEWAY_KEYS_FILE: /run/gateway-state/keys.local.json
+      GATEWAY_UPSTREAM_KEYS_FILE: ${GATEWAY_UPSTREAM_KEYS_FILE:-}
+      UPSTREAM_API_KEYS: ${UPSTREAM_API_KEYS:-}
+      UPSTREAM_KEY_HEADER: authorization
+      UPSTREAM_MAX_ATTEMPTS: ${UPSTREAM_MAX_ATTEMPTS:-4}
+      RETRY_STATUS_CODES: ${RETRY_STATUS_CODES:-401,403,429}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-180000}
+    volumes:
+      - type: bind
+        source: ${QUICK_CLIENT_HOST_FILE:?Set QUICK_CLIENT_HOST_FILE in .env}
+        target: /run/secrets/internal-client.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GATEWAY_STATE_HOST_DIR:?Set GATEWAY_STATE_HOST_DIR in .env}
+        target: /run/gateway-state
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:'+process.env.GATEWAY_PORT+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+
+  nginx:
+    image: ${NGINX_IMAGE:-nginx:stable-alpine}
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      NGINX_ENVSUBST_FILTER: '^(GATEWAY_PORT|QUICK_BIND_ADDR|QUICK_HTTP_PORT|QUICK_HTTPS_PORT|QUICK_TLS_DOMAIN)$$'
+      GATEWAY_PORT: ${GATEWAY_PORT:-18789}
+      QUICK_BIND_ADDR: ${QUICK_BIND_ADDR:-127.0.0.1}
+      QUICK_HTTP_PORT: ${QUICK_HTTP_PORT:-18080}
+      QUICK_HTTPS_PORT: ${QUICK_HTTPS_PORT:-18443}
+      QUICK_TLS_DOMAIN: ${QUICK_TLS_DOMAIN:?Set QUICK_TLS_DOMAIN in .env}
+    volumes:
+      - type: bind
+        source: ./nginx/default.conf.template
+        target: /etc/nginx/templates/default.conf.template
+        read_only: true
+      - type: bind
+        source: ${TLS_CERT_DIR:?Set TLS_CERT_DIR in .env}
+        target: /etc/nginx/tls
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /etc/nginx/conf.d
+      - /tmp
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:$${QUICK_HTTP_PORT}/healthz']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

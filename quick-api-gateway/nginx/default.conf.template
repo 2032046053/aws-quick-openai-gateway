@@ -1,0 +1,53 @@
+# Included in the nginx http context. Only explicitly listed variables are
+# substituted; nginx variables such as $host and $request_uri remain intact.
+log_format quick_metadata '$request_method $uri $status $request_time';
+access_log /dev/stdout quick_metadata;
+
+upstream quick_gateway {
+    server 127.0.0.1:${GATEWAY_PORT};
+    keepalive 16;
+}
+
+client_max_body_size 4m;
+proxy_http_version 1.1;
+proxy_connect_timeout 15s;
+proxy_send_timeout 300s;
+proxy_read_timeout 300s;
+proxy_set_header Connection "";
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_buffering off;
+proxy_request_buffering off;
+proxy_cache off;
+proxy_next_upstream off;
+gzip off;
+proxy_hide_header Cache-Control;
+add_header Cache-Control "no-store, no-transform" always;
+add_header X-Accel-Buffering "no" always;
+
+server {
+    listen ${QUICK_BIND_ADDR}:${QUICK_HTTP_PORT};
+    server_name ${QUICK_TLS_DOMAIN};
+    location = /healthz {
+        proxy_pass http://quick_gateway;
+    }
+    location / {
+        return 308 https://${QUICK_TLS_DOMAIN}:${QUICK_HTTPS_PORT}$request_uri;
+    }
+}
+
+server {
+    listen ${QUICK_BIND_ADDR}:${QUICK_HTTPS_PORT} ssl;
+    server_name ${QUICK_TLS_DOMAIN};
+    ssl_certificate /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:QuickTLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    location / {
+        proxy_pass http://quick_gateway;
+    }
+}

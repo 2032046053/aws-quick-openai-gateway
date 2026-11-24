@@ -159,3 +159,14 @@ scripts/              依赖安装辅助脚本
 ```
 
 参考：[AWS EventStream](https://smithy.io/2.0/aws/amazon-eventstream.html)、[Cloudflare Tunnel 路由](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/)。
+
+## Claude Code / Anthropic Messages
+
+支持 `POST /v1/messages`，详见 [Claude Code 配置](docs/CLAUDE.md)。
+
+- [工具完整定义按需加载](docs/TOOL-REGISTRY.md)与[提示词精简](docs/PROMPT-OPTIMIZATION.md)。
+- [Quick 会话自动更新](docs/AUTO-RENEW.md)及[后端思考设置](docs/THINKING.md)。
+- [上游 Key 池与模块化网关](docs/UPSTREAM-KEY-POOL.md)。
+- [Compose、Nginx SSE 和 HTTPS/TLS](docs/COMPOSE-TLS.md)，环境模板位于 `quick-api-gateway/.env.example`。
+
+当前 Quick 集成建议使用 Claude 的 Manual 权限模式。多 Key 支持需要目标后端实际接受相应凭据；不会因增加用户分发 Key 而增加 AWS 会话或额度。TLS 配置需自行提供匹配域名的正式证书。

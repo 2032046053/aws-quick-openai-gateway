@@ -101,6 +101,7 @@ export function createApiServer({key,complete,maxConcurrent=2}) {
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
   const session=process.env.QUICK_SESSION_FILE?JSON.parse(fs.readFileSync(process.env.QUICK_SESSION_FILE,'utf8')):{};
   const complete=createQuickClient({...session,
+    sessionFile:process.env.QUICK_SESSION_FILE&&!process.env.QUICK_COOKIE&&!process.env.QUICK_CSRF?process.env.QUICK_SESSION_FILE:undefined,
     accountId:process.env.QUICK_ACCOUNT_ID||session.accountId,
     cookie:process.env.QUICK_COOKIE||session.cookie,
     csrf:process.env.QUICK_CSRF||session.csrf,

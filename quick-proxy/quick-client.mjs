@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import WebSocket from 'ws';
 import {HttpsProxyAgent} from 'https-proxy-agent';
 import {randomUUID} from 'node:crypto';
@@ -26,8 +27,14 @@ export function buildRequest(messages) {
 }
 
 export function createQuickClient(config) {
+  if(!['off','low','medium','high','max'].includes(config.thinkingEffort||'high'))throw new Error('Invalid Quick thinking effort');
   const conversations=new Conversations(config.conversations);
   return async function* complete({messages,signal,principal='local',sessionId,revision,incremental=false}) {
+    if(config.sessionFile){
+      const disk=JSON.parse(fs.readFileSync(config.sessionFile,'utf8'));
+      if(String(disk.accountId)!==String(config.accountId))throw Object.assign(new Error('Session account changed; restart after verifying agent ownership'),{status:503});
+      config={...config,cookie:disk.cookie,csrf:disk.csrf};
+    }
     if(!config.cookie || !config.csrf) throw Object.assign(new Error('Quick login session is not configured'),{status:503});
     buildRequest(messages);
     const lease=conversations.acquire({messages,principal,sessionId,revision,incremental});
@@ -58,7 +65,7 @@ export function createQuickClient(config) {
       if(!binary) {fail(new Error('Unexpected non-binary upstream message'));return;}
       try {queue.push(...decoder.push(data));if(queue.length>2048)throw new Error('Quick event queue overflow');notify();} catch(e) {fail(e);}
     });
-    ws.on('error',()=>fail(new Error('Quick WebSocket connection failed')));
+    ws.on('error',()=>{if(!failed)fail(new Error('Quick WebSocket connection failed'));});
     ws.on('unexpected-response',(req,res)=>{res.resume();fail(Object.assign(new Error(`Quick authentication/handshake failed (HTTP ${res.statusCode})`),{status:res.statusCode===401||res.statusCode===302||res.statusCode===403?502:503}));ws.terminate();});
     ws.on('close',(code,reason)=>{closed=true;closeInfo=` (${code}${reason.length?': '+reason.toString().slice(0,160):''})`;notify();});
     try {
@@ -74,7 +81,7 @@ export function createQuickClient(config) {
           started=true;
           send({type:'user_message',payload:{
             traceId:randomUUID(),text,send_origin:'composer',had_physical_input:false,...features,
-            message_id:'msg-'+randomUUID().slice(0,8),thread_id:threadId,agent_mode:'smart',thinking_effort:'off',
+            message_id:'msg-'+randomUUID().slice(0,8),thread_id:threadId,agent_mode:'smart',thinking_effort:config.thinkingEffort||'high',
             user_timezone:config.timezone || 'Asia/Shanghai',user_locale:'zh-CN',custom_prompt:customPrompt,
             chat_agent_id:(incremental&&config.protocolAgentArn) || config.agentArn || `arn:aws:quicksight:${config.region || 'us-east-1'}:${config.accountId}:agent/SYSTEM`,
             auto_routing:false,web_search_enabled:false,direct_chat:false,voice_mode:false,voice_id:'matthew',tts_speed:1.1,

@@ -1,0 +1,7 @@
+**
+!Dockerfile
+!.dockerignore
+!gateway.mjs
+!keys.mjs
+!config.mjs
+!upstream-pool.mjs
