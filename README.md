@@ -164,6 +164,8 @@ scripts/              依赖安装辅助脚本
 
 支持 `POST /v1/messages`，详见 [Claude Code 配置](docs/CLAUDE.md)。
 
+大文件编码请参考[分页读取与压缩循环修复](docs/LARGE-FILE-CONTEXT.md)。
+
 - [工具完整定义按需加载](docs/TOOL-REGISTRY.md)与[提示词精简](docs/PROMPT-OPTIMIZATION.md)。
 - [Quick 会话自动更新](docs/AUTO-RENEW.md)及[后端思考设置](docs/THINKING.md)。
 - [上游 Key 池与模块化网关](docs/UPSTREAM-KEY-POOL.md)。
